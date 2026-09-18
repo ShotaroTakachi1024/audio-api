@@ -4,7 +4,7 @@ from flask_cors import CORS
 import opensmile
 import pandas as pd
 
-# テスト テスト
+# テスト テスト テスト
 app = Flask(__name__)
 CORS(app) # Webアンケート画面など、外部からのAPI呼び出しを許可
 
