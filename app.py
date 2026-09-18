@@ -1,63 +1,56 @@
+# render_template を追加でインポートします
+from flask import Flask, request, jsonify, render_template
 import os
-from flask import Flask, request, jsonify
 from flask_cors import CORS
 import opensmile
 import pandas as pd
 
-# テスト テスト テスト テスト
 app = Flask(__name__)
-CORS(app) # Webアンケート画面など、外部からのAPI呼び出しを許可
-
-# クラウド環境では /tmp が安全に書き込める一時フォルダです
+CORS(app)
 app.config['UPLOAD_FOLDER'] = '/tmp'
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
-# openSMILEの初期化（時系列 LLDs）
+# openSMILEの初期化などはそのまま...
 smile = opensmile.Smile(
     feature_set=opensmile.FeatureSet.eGeMAPSv02,
     feature_level=opensmile.FeatureLevel.LowLevelDescriptors,
 )
 
+# ① アクセスされたときに index.html（画面）を表示する
 @app.route('/', methods=['GET'])
 def index():
-    return "API is running. POST /extract to extract features."
+    return render_template('index.html')
 
-@app.route('/extract', methods=['POST'])
-def extract():
+# ② 画面から送られてきた音声と評価を受け取る
+@app.route('/submit', methods=['POST'])
+def submit():
+    # 1. 印象評価（アンケート回答）の取得
+    satisfaction = request.form.get('satisfaction')
+    
+    # 2. WAVファイルの取得と特徴量抽出
     if 'audio_file' not in request.files:
-        return jsonify({"error": "ファイルがありません"}), 400
+        return "ファイルがありません", 400
     
     file = request.files['audio_file']
-    if file.filename == '':
-        return jsonify({"error": "ファイルが選択されていません"}), 400
-    
-    if file and file.filename.endswith('.wav'):
+    if file.filename != '':
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
         file.save(filepath)
         
         try:
-            # 特徴量抽出
+            # 特徴量抽出 (先ほどまでの処理と同様)
             features_df = smile.process_file(filepath)
-            features_df = features_df.reset_index()
-            
-            if 'file' in features_df.columns:
-                features_df = features_df.drop(columns=['file'])
-            if 'start' in features_df.columns:
-                features_df['start'] = features_df['start'].dt.total_seconds()
-            if 'end' in features_df.columns:
-                features_df['end'] = features_df['end'].dt.total_seconds()
-            
-            features_list = features_df.to_dict(orient='records')
             os.remove(filepath)
             
-            return jsonify(features_list)
+            # 特徴量と評価結果を合わせて画面に返す
+            # 実際はここで、ユーザーの回答と抽出した音響特徴量をCSVなどに保存する処理を書きます
+            return jsonify({
+                "message": "データを受け取りました！",
+                "satisfaction_score": satisfaction,
+                "extracted_frames": len(features_df)
+            })
             
         except Exception as e:
-            if os.path.exists(filepath):
-                os.remove(filepath)
             return jsonify({"error": str(e)}), 500
-    else:
-        return jsonify({"error": "WAV形式のファイルのみ対応しています"}), 400
 
 if __name__ == '__main__':
     app.run(debug=True)
