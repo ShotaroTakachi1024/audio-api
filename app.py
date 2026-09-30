@@ -1,18 +1,14 @@
+from flask import Flask, request, jsonify, render_template
 import os
-from flask import Flask, request, jsonify
 from flask_cors import CORS
 import opensmile
 import pandas as pd
 
-# テスト テスト テスト テスト
 app = Flask(__name__)
-CORS(app) # Webアンケート画面など、外部からのAPI呼び出しを許可
-
-# クラウド環境では /tmp が安全に書き込める一時フォルダです
+CORS(app)
 app.config['UPLOAD_FOLDER'] = '/tmp'
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
-# openSMILEの初期化（時系列 LLDs）
 smile = opensmile.Smile(
     feature_set=opensmile.FeatureSet.eGeMAPSv02,
     feature_level=opensmile.FeatureLevel.LowLevelDescriptors,
@@ -20,44 +16,61 @@ smile = opensmile.Smile(
 
 @app.route('/', methods=['GET'])
 def index():
-    return "API is running. POST /extract to extract features."
+    return render_template('index.html')
 
-@app.route('/extract', methods=['POST'])
-def extract():
-    if 'audio_file' not in request.files:
-        return jsonify({"error": "ファイルがありません"}), 400
+@app.route('/submit', methods=['POST'])
+def submit():
+    # 1. 保存許可のチェック状態を取得
+    # チェックされていれば 'yes'、されていなければ None になります
+    allow_save = request.form.get('allow_save') == 'yes'
     
-    file = request.files['audio_file']
-    if file.filename == '':
-        return jsonify({"error": "ファイルが選択されていません"}), 400
+    # 2. 評価用CSVファイルの受け取り
+    eval_csv = request.files.get('eval_csv')
+    if eval_csv:
+        csv_path = os.path.join(app.config['UPLOAD_FOLDER'], eval_csv.filename)
+        eval_csv.save(csv_path)
+        # TODO: ここで pd.read_csv(csv_path) などを使用して評価データを読み込む
     
-    if file and file.filename.endswith('.wav'):
+    # 3. 複数WAVファイルの受け取りと処理
+    audio_files = request.files.getlist('audio_files')
+    processed_results = []
+    
+    for file in audio_files:
+        if file.filename == '':
+            continue
+            
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
         file.save(filepath)
         
         try:
-            # 特徴量抽出
+            # openSMILEで特徴量抽出
             features_df = smile.process_file(filepath)
-            features_df = features_df.reset_index()
             
-            if 'file' in features_df.columns:
-                features_df = features_df.drop(columns=['file'])
-            if 'start' in features_df.columns:
-                features_df['start'] = features_df['start'].dt.total_seconds()
-            if 'end' in features_df.columns:
-                features_df['end'] = features_df['end'].dt.total_seconds()
+            # 結果をリストに記録
+            processed_results.append({
+                "filename": file.filename,
+                "frames_extracted": len(features_df)
+            })
             
-            features_list = features_df.to_dict(orient='records')
-            os.remove(filepath)
-            
-            return jsonify(features_list)
-            
+            # ★企業秘密への配慮（データ破棄ロジック）
+            if not allow_save:
+                # 許可がなければ、特徴量だけ抽出して即座にWAV本体を削除する
+                os.remove(filepath)
+            else:
+                # 許可がある場合は保存しておく（※後述のRenderの仕様に注意）
+                pass
+                
         except Exception as e:
             if os.path.exists(filepath):
                 os.remove(filepath)
-            return jsonify({"error": str(e)}), 500
-    else:
-        return jsonify({"error": "WAV形式のファイルのみ対応しています"}), 400
+            processed_results.append({"filename": file.filename, "error": str(e)})
+
+    # レスポンスを返す
+    return jsonify({
+        "message": "処理が完了しました",
+        "saved_audio": allow_save,
+        "processed_files": processed_results
+    })
 
 if __name__ == '__main__':
     app.run(debug=True)
