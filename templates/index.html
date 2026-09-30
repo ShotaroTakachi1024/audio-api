@@ -2,27 +2,34 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>歌唱データ＆印象評価入力システム</title>
+    <title>【法人用】歌唱データ＆印象評価アップロード</title>
 </head>
 <body>
-    <h1>歌唱データと印象評価の入力</h1>
+    <h1>歌唱データ・印象評価 一括解析システム</h1>
+    <p>AI採点の納得感向上モデル構築のためのデータ送信フォームです。</p>
 
-    <!-- 音声ファイルと評価を一緒に送信するフォーム -->
     <form action="/submit" method="POST" enctype="multipart/form-data">
         
         <h3>1. 歌唱データ (WAVファイル) のアップロード</h3>
-        <input type="file" name="audio_file" accept=".wav" required>
+        <p>※ShiftキーやCtrl(Command)キーを押しながら、複数のWAVファイルを一括選択できます。</p>
+        <input type="file" name="audio_files" accept=".wav" multiple required>
         
-        <h3>2. 印象評価</h3>
-        <p>このAI採点の評価結果に対する納得感を教えてください（1:全く納得できない 〜 5:非常に納得できる）</p>
-        <input type="radio" name="satisfaction" value="1"> 1
-        <input type="radio" name="satisfaction" value="2"> 2
-        <input type="radio" name="satisfaction" value="3"> 3
-        <input type="radio" name="satisfaction" value="4"> 4
-        <input type="radio" name="satisfaction" value="5"> 5
+        <h3>2. 印象評価データ (CSVファイル)</h3>
+        <p>※200曲×40名×14項目の評価結果がまとまったCSVファイルを選択してください。</p>
+        <input type="file" name="eval_csv" accept=".csv" required>
+
+        <h3>3. データ取り扱いに関する同意</h3>
+        <p>送信された音声ファイルから音響特徴量（LLDs）を抽出します。<br>
+        抽出元のWAVファイル本体を、当研究室のサーバーに研究用データとして保存することを許可いただけますか？</p>
+        <!-- チェックボックス（チェックされた場合のみ 'yes' が送信される） -->
+        <label>
+            <input type="checkbox" name="allow_save" value="yes">
+            <b>はい、音声ファイル本体の保存を許可します。</b><br>
+            <small>※チェックがない場合、特徴量抽出後に音声ファイルはサーバーから即時完全に削除されます。</small>
+        </label>
         
-        <br><br>
-        <button type="submit">送信して特徴量と評価を保存</button>
+        <br><br><br>
+        <button type="submit">一括解析を実行する</button>
     </form>
 </body>
 </html>
