@@ -3,6 +3,10 @@ import os
 from flask_cors import CORS
 import opensmile
 import pandas as pd
+import json
+from google.cloud import storage
+from google.oauth2 import service_account
+
 
 app = Flask(__name__)
 CORS(app)
@@ -14,9 +18,60 @@ smile = opensmile.Smile(
     feature_level=opensmile.FeatureLevel.LowLevelDescriptors,
 )
 
+def get_gcs_bucket():
+
+    service_account_info = json.loads(
+        os.environ["GCP_SERVICE_ACCOUNT_JSON"]
+    )
+
+    credentials = (
+        service_account.Credentials.from_service_account_info(
+            service_account_info
+        )
+    )
+
+    storage_client = storage.Client(
+        credentials=credentials,
+        project=service_account_info["project_id"]
+    )
+
+    bucket = storage_client.bucket(
+        os.environ["GCS_BUCKET_NAME"]
+    )
+
+    return bucket
+
 @app.route('/', methods=['GET'])
 def index():
     return render_template('index.html')
+
+@app.route('/gcs-test', methods=['GET'])
+def gcs_test():
+
+    try:
+        bucket = get_gcs_bucket()
+
+        blob = bucket.blob(
+            "test/render_connection.txt"
+        )
+
+        blob.upload_from_string(
+            "Render -> Google Cloud Storage connection OK",
+            content_type="text/plain"
+        )
+
+        return jsonify({
+            "success": True,
+            "message": "GCSへの書き込みに成功しました",
+            "object": "test/render_connection.txt"
+        })
+
+    except Exception as e:
+
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
 
 @app.route('/submit', methods=['POST'])
 def submit():
