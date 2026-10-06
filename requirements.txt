@@ -3,5 +3,6 @@ Flask-Cors
 opensmile
 pandas
 gunicorn
-
+google-cloud-storage
+google-auth
 
