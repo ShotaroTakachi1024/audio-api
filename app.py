@@ -5,6 +5,7 @@ import uuid
 import tempfile
 import io
 from datetime import datetime, timezone
+import numpy as np
 
 import opensmile
 import pandas as pd
