@@ -111,13 +111,317 @@ smile_lld = opensmile.Smile(
 # 3. 特徴量抽出
 # =========================================================
 
+# eGeMAPSv02 LLDは約10ms刻み
+FRAME_SHIFT_SEC = 0.01
+
+# 10 / 25 / 50 / 100フレーム
+# 約100 / 250 / 500 / 1000 ms
+DYNAMIC_WINDOWS = [10, 25, 50, 100]
+
+DYNAMIC_COLUMNS = {
+    "f0": "F0semitoneFrom27.5Hz_sma3nz",
+    "loudness": "Loudness_sma3",
+    "mfcc1": "mfcc1_sma3",
+    "f1": "F1frequency_sma3nz",
+    "f2": "F2frequency_sma3nz",
+}
+
+
+def _get_contiguous_segments(mask):
+    """
+    Trueが連続している区間を取得する。
+    F0などで無声音区間をまたいで計算しないために使用。
+    """
+
+    indices = np.where(mask)[0]
+
+    if len(indices) == 0:
+        return []
+
+    split_points = np.where(
+        np.diff(indices) > 1
+    )[0] + 1
+
+    return np.split(
+        indices,
+        split_points
+    )
+
+
+def _calculate_rolling_slopes(
+    values,
+    window_size,
+    positive_only=False
+):
+    """
+    指定窓幅ごとに局所的な線形回帰の傾きを求める。
+
+    傾きの単位:
+      F0       → semitone / sec
+      F1, F2   → Hz / sec
+      その他   → feature unit / sec
+    """
+
+    values = np.asarray(
+        values,
+        dtype=float
+    )
+
+    valid = np.isfinite(values)
+
+    # F0・formantでは0は無効値として扱う
+    if positive_only:
+        valid &= values > 0
+
+    segments = _get_contiguous_segments(
+        valid
+    )
+
+    slopes = []
+
+    # 時間軸
+    x = (
+        np.arange(window_size)
+        * FRAME_SHIFT_SEC
+    )
+
+    x_centered = x - x.mean()
+
+    denominator = np.sum(
+        x_centered ** 2
+    )
+
+    for indices in segments:
+
+        segment = values[indices]
+
+        if len(segment) < window_size:
+            continue
+
+        for start in range(
+            len(segment)
+            - window_size
+            + 1
+        ):
+
+            y = segment[
+                start:
+                start + window_size
+            ]
+
+            # x_centered の和は0なので
+            # yの平均を引かなくても傾きを計算可能
+            slope = (
+                np.dot(
+                    x_centered,
+                    y
+                )
+                / denominator
+            )
+
+            slopes.append(
+                slope
+            )
+
+    return np.asarray(
+        slopes,
+        dtype=float
+    )
+
+
+def extract_dynamic_features(
+    lld_df
+):
+
+    dynamic_features = {}
+
+    for short_name, column_name in (
+        DYNAMIC_COLUMNS.items()
+    ):
+
+        if column_name not in lld_df.columns:
+            continue
+
+        values = (
+            lld_df[column_name]
+            .to_numpy(dtype=float)
+        )
+
+        # F0・formantは0を欠損相当として扱う
+        positive_only = (
+            short_name
+            in {"f0", "f1", "f2"}
+        )
+
+        for window in DYNAMIC_WINDOWS:
+
+            slopes = (
+                _calculate_rolling_slopes(
+                    values,
+                    window,
+                    positive_only
+                )
+            )
+
+            duration_ms = int(
+                window
+                * FRAME_SHIFT_SEC
+                * 1000
+            )
+
+            prefix = (
+                f"{short_name}"
+                f"_dynamic_{duration_ms}ms"
+            )
+
+            if len(slopes) == 0:
+
+                dynamic_features[
+                    f"{prefix}_mean_abs_slope"
+                ] = np.nan
+
+                dynamic_features[
+                    f"{prefix}_std_slope"
+                ] = np.nan
+
+            else:
+
+                # 動きの大きさ
+                dynamic_features[
+                    f"{prefix}_mean_abs_slope"
+                ] = float(
+                    np.mean(
+                        np.abs(slopes)
+                    )
+                )
+
+                # 動きのばらつき
+                dynamic_features[
+                    f"{prefix}_std_slope"
+                ] = float(
+                    np.std(slopes)
+                )
+
+    return dynamic_features
+
+def extract_f0_stability_features(
+    lld_df
+):
+
+    column = (
+        "F0semitoneFrom27.5Hz_sma3nz"
+    )
+
+    if column not in lld_df.columns:
+
+        return {}
+
+    f0 = (
+        lld_df[column]
+        .to_numpy(dtype=float)
+    )
+
+    # 隣り合うフレームのF0差
+    delta = np.diff(f0)
+
+    # 両方とも有声音である場合のみ使用
+    # 無声音を削除してからdiffすると、
+    # 離れた有声音区間をつないでしまうのでNG
+    valid_pair = (
+        np.isfinite(f0[:-1])
+        & np.isfinite(f0[1:])
+        & (f0[:-1] > 0)
+        & (f0[1:] > 0)
+    )
+
+    delta = delta[
+        valid_pair
+    ]
+
+    if len(delta) == 0:
+
+        return {
+            "f0_delta_cent_mean_abs":
+                np.nan,
+
+            "f0_delta_cent_median_abs":
+                np.nan,
+
+            "f0_delta_cent_p90_abs":
+                np.nan,
+
+            "f0_stable_ratio_5cent":
+                np.nan,
+
+            "f0_stable_ratio_10cent":
+                np.nan,
+
+            "f0_stable_ratio_20cent":
+                np.nan,
+        }
+
+    # openSMILEのF0はsemitoneなので
+    # 1 semitone = 100 cents
+    delta_cent = (
+        np.abs(delta)
+        * 100.0
+    )
+
+    return {
+
+        # 10msごとのF0変化量
+        "f0_delta_cent_mean_abs":
+            float(
+                np.mean(
+                    delta_cent
+                )
+            ),
+
+        "f0_delta_cent_median_abs":
+            float(
+                np.median(
+                    delta_cent
+                )
+            ),
+
+        "f0_delta_cent_p90_abs":
+            float(
+                np.percentile(
+                    delta_cent,
+                    90
+                )
+            ),
+
+        # 安定しているフレームの割合
+        "f0_stable_ratio_5cent":
+            float(
+                np.mean(
+                    delta_cent <= 5
+                )
+            ),
+
+        "f0_stable_ratio_10cent":
+            float(
+                np.mean(
+                    delta_cent <= 10
+                )
+            ),
+
+        "f0_stable_ratio_20cent":
+            float(
+                np.mean(
+                    delta_cent <= 20
+                )
+            ),
+    }
+
 def extract_acoustic_features(
     wav_path
 ):
 
-    # ---------------------------------------------
-    # eGeMAPSv02 88次元 Functionals
-    # ---------------------------------------------
+    # =============================================
+    # eGeMAPSv02 88 Functionals
+    # =============================================
 
     functionals_df = (
         smile_functionals.process_file(
@@ -131,17 +435,10 @@ def extract_acoustic_features(
         .to_dict()
     )
 
-    # ---------------------------------------------
+
+    # =============================================
     # LLD
-    # 現時点ではフレーム数だけ記録
-    #
-    # 次のステップで、
-    # F0 delta
-    # Loudness delta
-    # F0 stability
-    # Vibrato
-    # などを追加する
-    # ---------------------------------------------
+    # =============================================
 
     lld_df = (
         smile_lld.process_file(
@@ -149,13 +446,40 @@ def extract_acoustic_features(
         )
     )
 
-    frame_count = len(
-        lld_df
+
+    # =============================================
+    # 動的特徴量
+    # =============================================
+
+    dynamic_features = (
+        extract_dynamic_features(
+            lld_df
+        )
     )
+
+    features.update(
+        dynamic_features
+    )
+
+
+    # =============================================
+    # F0安定度
+    # =============================================
+
+    stability_features = (
+        extract_f0_stability_features(
+            lld_df
+        )
+    )
+
+    features.update(
+        stability_features
+    )
+
 
     return (
         features,
-        frame_count
+        len(lld_df)
     )
 
 
@@ -596,7 +920,7 @@ def submit():
                 "Singing Evaluation Feature Extractor",
 
             "version":
-                "1.0.0",
+                "1.1.0",
 
             "feature_set":
                 "eGeMAPSv02",
@@ -605,7 +929,36 @@ def submit():
                 True,
 
             "lld":
-                True
+                True,
+
+            "dynamic_features": {
+                "targets": [
+                    "F0",
+                    "Loudness",
+                    "MFCC1",
+                    "F1",
+                    "F2"
+                ],
+                "frame_shift_sec":
+                    0.01,
+                "window_frames": [
+                    10,
+                    25,
+                    50,
+                    100
+                ]
+            },
+
+            "f0_stability": {
+                "unit":
+                    "cent",
+
+                "threshold_cent": [
+                    5,
+                    10,
+                    20
+                ]
+            }
         },
 
         "features_path":
