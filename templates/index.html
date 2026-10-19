@@ -1,160 +1,795 @@
 <!DOCTYPE html>
-
 <html lang="ja">
 
 <head>
-
     <meta charset="UTF-8">
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
 
-    <meta name="viewport"
-          content="width=device-width, initial-scale=1.0">
+    <title>歌唱データ・印象評価アップロード</title>
 
-    <title>
-        歌唱データ・印象評価アップロード
-    </title>
+    <style>
+        body {
+            font-family: sans-serif;
+            max-width: 850px;
+            margin: 40px auto;
+            padding: 0 20px;
+            line-height: 1.7;
+        }
 
+        h1 {
+            margin-bottom: 8px;
+        }
+
+        .section {
+            margin-top: 32px;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+        }
+
+        button {
+            margin-top: 24px;
+            padding: 12px 24px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        #progressArea {
+            display: none;
+            margin-top: 30px;
+        }
+
+        progress {
+            width: 100%;
+            height: 28px;
+        }
+
+        #progressText {
+            font-size: 20px;
+            font-weight: bold;
+            margin-top: 10px;
+        }
+
+        #currentStatus {
+            margin-top: 8px;
+        }
+
+        #resultLog {
+            margin-top: 20px;
+            max-height: 350px;
+            overflow-y: auto;
+            background: #f6f6f6;
+            padding: 16px;
+            border-radius: 8px;
+            white-space: pre-wrap;
+        }
+
+        .success {
+            color: green;
+        }
+
+        .error {
+            color: red;
+        }
+    </style>
 </head>
-
 
 <body>
 
-    <h1>
-        歌唱データ・印象評価 一括解析システム
-    </h1>
+    <h1>歌唱データ・印象評価 一括解析システム</h1>
 
     <p>
-        AI採点の納得感向上モデル構築のための
-        音響特徴量抽出・データ送信システムです。
+        複数の歌唱音声を選択すると、
+        システムが10ファイルずつ自動的に送信・解析します。
     </p>
 
 
-    <form
-        action="/submit"
-        method="POST"
-        enctype="multipart/form-data"
-    >
+    <form id="uploadForm">
 
+        <div class="section">
 
-        <h3>
-            1. 歌唱データ（WAV）
-        </h3>
+            <h2>1. 歌唱データ（WAV）</h2>
 
-
-        <p>
-            複数のWAVファイルを
-            一括選択できます。
-        </p>
-
-
-        <input
-            type="file"
-            name="audio_files"
-            accept=".wav,audio/wav"
-            multiple
-            required
-        >
-
-
-
-        <h3>
-            2. 印象評価データ（CSV）
-        </h3>
-
-
-        <input
-            type="file"
-            name="eval_csv"
-            accept=".csv,text/csv"
-            required
-        >
-
-
-
-        <h3>
-            3. 研究利用への確認
-        </h3>
-
-
-        <label>
+            <p>
+                最大200件程度のWAVファイルを一度に選択できます。
+            </p>
 
             <input
-                type="checkbox"
-                name="allow_feature_use"
-                value="yes"
+                id="audioFiles"
+                type="file"
+                name="audio_files"
+                accept=".wav,audio/wav"
+                multiple
                 required
             >
 
-            <strong>
-                音声から抽出された音響特徴量と、
-                印象評価データを研究分析に利用することに
-                同意します。
-            </strong>
+            <p id="fileCount">
+                0ファイル選択
+            </p>
 
-        </label>
+        </div>
 
 
+        <div class="section">
 
-        <br><br>
-
-
-
-        <h3>
-            4. 元音声の保存について
-        </h3>
-
-
-        <p>
-            音響特徴量の抽出には、
-            選択されたWAVファイルを一時的に使用します。
-        </p>
-
-
-        <label>
+            <h2>2. 印象評価データ（CSV）</h2>
 
             <input
-                type="checkbox"
-                name="allow_save"
-                value="yes"
+                id="evalCsv"
+                type="file"
+                name="eval_csv"
+                accept=".csv,text/csv"
+                required
             >
 
-            <strong>
-                元の歌唱音声（WAVファイル）についても、
+        </div>
+
+
+        <div class="section">
+
+            <h2>3. 研究利用への確認</h2>
+
+            <label>
+                <input
+                    id="allowFeatureUse"
+                    type="checkbox"
+                    name="allow_feature_use"
+                    value="yes"
+                    required
+                >
+
+                音声から抽出された音響特徴量と
+                印象評価データを研究分析に利用することに同意します。
+            </label>
+
+        </div>
+
+
+        <div class="section">
+
+            <h2>4. 元音声の保存</h2>
+
+            <label>
+                <input
+                    id="allowSave"
+                    type="checkbox"
+                    name="allow_save"
+                    value="yes"
+                >
+
+                元の歌唱音声（WAVファイル）も
                 研究用データとして保存することを許可します。
-            </strong>
+            </label>
 
-        </label>
-
-
-        <p>
-
-            <small>
-
+            <p>
                 チェックしない場合、
-                元音声は特徴量抽出処理にのみ一時的に使用し、
-                研究用データとして保存しません。
-
-                処理終了後、
+                WAVは特徴量抽出に一時的に使用した後、
                 Render上の一時ファイルを削除します。
+            </p>
 
-            </small>
-
-        </p>
-
+        </div>
 
 
-        <br>
-
-
-        <button type="submit">
-
-            音響特徴量を抽出して送信
-
+        <button
+            id="submitButton"
+            type="submit"
+        >
+            解析を開始
         </button>
-
 
     </form>
 
 
-</body>
+    <div id="progressArea">
 
+        <h2>処理状況</h2>
+
+        <progress
+            id="progressBar"
+            value="0"
+            max="100"
+        ></progress>
+
+        <div id="progressText">
+            0 / 0
+        </div>
+
+        <div id="currentStatus">
+            準備中...
+        </div>
+
+        <div id="resultLog"></div>
+
+    </div>
+
+
+<script>
+
+const BATCH_SIZE = 10;
+
+const form =
+    document.getElementById("uploadForm");
+
+const audioInput =
+    document.getElementById("audioFiles");
+
+const evalInput =
+    document.getElementById("evalCsv");
+
+const submitButton =
+    document.getElementById("submitButton");
+
+const fileCount =
+    document.getElementById("fileCount");
+
+const progressArea =
+    document.getElementById("progressArea");
+
+const progressBar =
+    document.getElementById("progressBar");
+
+const progressText =
+    document.getElementById("progressText");
+
+const currentStatus =
+    document.getElementById("currentStatus");
+
+const resultLog =
+    document.getElementById("resultLog");
+
+
+audioInput.addEventListener(
+    "change",
+    () => {
+
+        const count =
+            audioInput.files.length;
+
+        fileCount.textContent =
+            `${count}ファイル選択`;
+
+    }
+);
+
+
+function addLog(
+    message,
+    className = ""
+) {
+
+    const div =
+        document.createElement("div");
+
+    div.textContent =
+        message;
+
+    if (className) {
+        div.className =
+            className;
+    }
+
+    resultLog.appendChild(
+        div
+    );
+
+    resultLog.scrollTop =
+        resultLog.scrollHeight;
+}
+
+
+function createCollectionId() {
+
+    if (
+        window.crypto &&
+        crypto.randomUUID
+    ) {
+
+        return crypto.randomUUID();
+
+    }
+
+    return (
+        Date.now().toString()
+        + "-"
+        + Math.random()
+            .toString(36)
+            .substring(2)
+    );
+}
+
+
+async function sendBatch({
+    files,
+    batchIndex,
+    totalBatches,
+    collectionId,
+    evalFile,
+    includeEvaluation,
+    allowSave
+}) {
+
+    const formData =
+        new FormData();
+
+
+    // 200音声全体を識別するID
+    formData.append(
+        "collection_id",
+        collectionId
+    );
+
+
+    formData.append(
+        "batch_number",
+        String(
+            batchIndex + 1
+        )
+    );
+
+
+    formData.append(
+        "total_batches",
+        String(
+            totalBatches
+        )
+    );
+
+
+    formData.append(
+        "allow_feature_use",
+        "yes"
+    );
+
+
+    if (allowSave) {
+
+        formData.append(
+            "allow_save",
+            "yes"
+        );
+
+    }
+
+
+    // 評価CSVは最初のバッチだけ送信
+    if (
+        includeEvaluation &&
+        evalFile
+    ) {
+
+        formData.append(
+            "eval_csv",
+            evalFile
+        );
+
+    }
+
+
+    for (
+        const file of files
+    ) {
+
+        formData.append(
+            "audio_files",
+            file
+        );
+
+    }
+
+
+    const response =
+        await fetch(
+            "/submit",
+            {
+                method: "POST",
+                body: formData
+            }
+        );
+
+
+    let result;
+
+    try {
+
+        result =
+            await response.json();
+
+    } catch {
+
+        throw new Error(
+            `サーバーから正常なJSONが返されませんでした。HTTP ${response.status}`
+        );
+
+    }
+
+
+    if (
+        !response.ok ||
+        result.success === false
+    ) {
+
+        throw new Error(
+            result.error ||
+            "バッチ処理に失敗しました。"
+        );
+
+    }
+
+
+    return result;
+}
+
+
+form.addEventListener(
+    "submit",
+    async (event) => {
+
+        event.preventDefault();
+
+
+        const files =
+            Array.from(
+                audioInput.files
+            );
+
+
+        const evalFile =
+            evalInput.files[0];
+
+
+        const allowFeatureUse =
+            document
+            .getElementById(
+                "allowFeatureUse"
+            )
+            .checked;
+
+
+        const allowSave =
+            document
+            .getElementById(
+                "allowSave"
+            )
+            .checked;
+
+
+        if (
+            files.length === 0
+        ) {
+
+            alert(
+                "WAVファイルを選択してください。"
+            );
+
+            return;
+        }
+
+
+        if (
+            !evalFile
+        ) {
+
+            alert(
+                "評価CSVを選択してください。"
+            );
+
+            return;
+        }
+
+
+        if (
+            !allowFeatureUse
+        ) {
+
+            alert(
+                "研究利用への確認が必要です。"
+            );
+
+            return;
+        }
+
+
+        const totalFiles =
+            files.length;
+
+
+        const totalBatches =
+            Math.ceil(
+                totalFiles /
+                BATCH_SIZE
+            );
+
+
+        const collectionId =
+            createCollectionId();
+
+
+        progressArea.style.display =
+            "block";
+
+
+        submitButton.disabled =
+            true;
+
+
+        audioInput.disabled =
+            true;
+
+
+        evalInput.disabled =
+            true;
+
+
+        resultLog.innerHTML =
+            "";
+
+
+        progressBar.value =
+            0;
+
+
+        progressText.textContent =
+            `0 / ${totalFiles}`;
+
+
+        addLog(
+            `collection_id: ${collectionId}`
+        );
+
+
+        addLog(
+            `${totalFiles}件を ${totalBatches} バッチに分割して処理します。`
+        );
+
+
+        let completedFiles =
+            0;
+
+
+        try {
+
+            for (
+                let batchIndex = 0;
+                batchIndex < totalBatches;
+                batchIndex++
+            ) {
+
+                const start =
+                    batchIndex *
+                    BATCH_SIZE;
+
+
+                const end =
+                    Math.min(
+                        start +
+                        BATCH_SIZE,
+                        totalFiles
+                    );
+
+
+                const batchFiles =
+                    files.slice(
+                        start,
+                        end
+                    );
+
+
+                currentStatus.textContent =
+                    `バッチ ${batchIndex + 1} / ${totalBatches} を処理中 `
+                    + `(${start + 1}〜${end}件目)`;
+
+
+                addLog(
+                    `▶ バッチ ${batchIndex + 1}: ${batchFiles.length}件を送信`
+                );
+
+
+                // 最大2回まで再試行
+                let result = null;
+
+                let lastError = null;
+
+
+                for (
+                    let attempt = 1;
+                    attempt <= 2;
+                    attempt++
+                ) {
+
+                    try {
+
+                        result =
+                            await sendBatch({
+
+                                files:
+                                    batchFiles,
+
+                                batchIndex,
+
+                                totalBatches,
+
+                                collectionId,
+
+                                evalFile,
+
+                                includeEvaluation:
+                                    batchIndex === 0,
+
+                                allowSave
+
+                            });
+
+
+                        lastError =
+                            null;
+
+                        break;
+
+
+                    } catch (error) {
+
+                        lastError =
+                            error;
+
+
+                        addLog(
+                            `バッチ ${batchIndex + 1} 失敗 `
+                            + `(試行 ${attempt}/2): `
+                            + error.message,
+                            "error"
+                        );
+
+
+                        if (
+                            attempt < 2
+                        ) {
+
+                            addLog(
+                                "5秒後に再試行します..."
+                            );
+
+
+                            await new Promise(
+                                resolve =>
+                                    setTimeout(
+                                        resolve,
+                                        5000
+                                    )
+                            );
+
+                        }
+
+                    }
+
+                }
+
+
+                if (
+                    lastError
+                ) {
+
+                    throw lastError;
+
+                }
+
+
+                completedFiles +=
+                    batchFiles.length;
+
+
+                const percentage =
+                    (
+                        completedFiles /
+                        totalFiles
+                    ) *
+                    100;
+
+
+                progressBar.value =
+                    percentage;
+
+
+                progressText.textContent =
+                    `${completedFiles} / ${totalFiles}`;
+
+
+                addLog(
+                    `✓ バッチ ${batchIndex + 1} 完了`,
+                    "success"
+                );
+
+
+                if (
+                    result.processed_files
+                ) {
+
+                    for (
+                        const item
+                        of result.processed_files
+                    ) {
+
+                        if (
+                            item.error
+                        ) {
+
+                            addLog(
+                                `  × ${item.filename}: ${item.error}`,
+                                "error"
+                            );
+
+                        } else {
+
+                            addLog(
+                                `  ✓ ${item.filename}`,
+                                "success"
+                            );
+
+                        }
+
+                    }
+
+                }
+
+            }
+
+
+            currentStatus.textContent =
+                "すべての処理が完了しました。";
+
+
+            progressBar.value =
+                100;
+
+
+            progressText.textContent =
+                `${totalFiles} / ${totalFiles}`;
+
+
+            addLog(
+                "✓ 全音声の処理が完了しました。",
+                "success"
+            );
+
+
+        } catch (error) {
+
+            currentStatus.textContent =
+                "処理中にエラーが発生しました。";
+
+
+            addLog(
+                `処理停止: ${error.message}`,
+                "error"
+            );
+
+
+        } finally {
+
+            submitButton.disabled =
+                false;
+
+
+            audioInput.disabled =
+                false;
+
+
+            evalInput.disabled =
+                false;
+
+        }
+
+    }
+);
+
+</script>
+
+</body>
 </html>
