@@ -594,9 +594,36 @@ def submit():
     # -----------------------------------------------------
     # 1回の送信を識別するID
     # -----------------------------------------------------
+   # 200音声全体を表すID
+    collection_id = request.form.get(
+        "collection_id"
+    )
 
+    if not collection_id:
+        collection_id = str(
+            uuid.uuid4()
+        )
+
+
+    # 今回の10件分を表すID
     batch_id = str(
         uuid.uuid4()
+    )
+
+
+    batch_number = int(
+        request.form.get(
+            "batch_number",
+            1
+        )
+    )
+
+
+    total_batches = int(
+        request.form.get(
+            "total_batches",
+            1
+        )
     )
 
     submitted_at = (
@@ -639,6 +666,7 @@ def submit():
 
             evaluation_path = (
                 f"evaluations/"
+                f"{collection_id}/"
                 f"{batch_id}/"
                 f"evaluation.csv"
             )
@@ -772,7 +800,12 @@ def submit():
             # WAV保存許可あり
             # =========================================
 
-            audio_gcs_path = None
+            audio_gcs_path = (
+                f"audio/"
+                f"{collection_id}/"
+                f"{batch_id}/"
+                f"{sample_id}.wav"
+            )
 
 
             if allow_save:
@@ -878,6 +911,7 @@ def submit():
 
         features_path = (
             f"features/"
+            f"{collection_id}/"
             f"{batch_id}/"
             f"features.csv"
         )
@@ -895,7 +929,9 @@ def submit():
     # =====================================================
 
     manifest = {
-
+        "collection_id":
+            collection_id,
+        
         "batch_id":
             batch_id,
 
@@ -972,6 +1008,7 @@ def submit():
 
     manifest_path = (
         f"manifests/"
+        f"{collection_id}/"
         f"{batch_id}/"
         f"manifest.json"
     )
