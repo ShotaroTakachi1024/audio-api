@@ -552,123 +552,67 @@ def gcs_test():
 
 
 # =========================================================
-# 7. 本処理
+# 7. アップロード受付
+# =========================================================
+# 重要:
+#   このWebサービスでは openSMILE の解析をしません。
+#   WAVをGCSの incoming/ に保存して、受付完了後に
+#   worker.py がバックグラウンドで解析します。
 # =========================================================
 
-@app.route(
-    "/submit",
-    methods=["POST"]
-)
-def submit():
+def upload_filestorage_to_gcs(file_storage, object_name, content_type=None):
+    bucket = get_gcs_bucket()
+    blob = bucket.blob(object_name)
+    file_storage.stream.seek(0)
+    blob.upload_from_file(
+        file_storage.stream,
+        content_type=content_type or file_storage.mimetype or "application/octet-stream",
+    )
 
-    # -----------------------------------------------------
-    # 特徴量・評価データの研究利用への同意
-    # -----------------------------------------------------
+
+@app.route("/upload-batch", methods=["POST"])
+def upload_batch():
 
     allow_feature_use = (
-        request.form.get(
-            "allow_feature_use"
-        ) == "yes"
+        request.form.get("allow_feature_use") == "yes"
     )
 
     if not allow_feature_use:
-
         return jsonify({
             "success": False,
-            "error":
-                "音響特徴量および評価データの研究利用への同意が必要です。"
+            "error": "音響特徴量および評価データの研究利用への同意が必要です。"
         }), 400
 
-
-    # -----------------------------------------------------
-    # WAV保存許可
-    # -----------------------------------------------------
-
-    allow_save = (
-        request.form.get(
-            "allow_save"
-        ) == "yes"
-    )
-
-
-    # -----------------------------------------------------
-    # 1回の送信を識別するID
-    # -----------------------------------------------------
-   # 200音声全体を表すID
-    collection_id = request.form.get(
-        "collection_id"
-    )
-
+    collection_id = request.form.get("collection_id")
     if not collection_id:
-        collection_id = str(
-            uuid.uuid4()
-        )
+        return jsonify({
+            "success": False,
+            "error": "collection_id がありません。"
+        }), 400
 
+    batch_number = int(request.form.get("batch_number", 1))
+    total_batches = int(request.form.get("total_batches", 1))
+    start_index = int(request.form.get("start_index", 0))
+    allow_save = request.form.get("allow_save") == "yes"
 
-    # 今回の10件分を表すID
-    batch_id = str(
-        uuid.uuid4()
-    )
-
-
-    batch_number = int(
-        request.form.get(
-            "batch_number",
-            1
-        )
-    )
-
-
-    total_batches = int(
-        request.form.get(
-            "total_batches",
-            1
-        )
-    )
-
-    submitted_at = (
-        datetime.now(
-            timezone.utc
-        ).isoformat()
-    )
-
-
-    processed_results = []
-    all_features = []
-
-
-    # =====================================================
-    # A. 印象評価CSV
-    # =====================================================
-
-    eval_csv = request.files.get(
-        "eval_csv"
-    )
-
+    # -----------------------------
+    # 評価CSVは最初のバッチだけ送る
+    # -----------------------------
+    eval_csv = request.files.get("eval_csv")
     evaluation_path = None
 
-
-    if (
-        eval_csv
-        and eval_csv.filename
-    ):
-
+    if eval_csv and eval_csv.filename:
         try:
+            eval_csv.stream.seek(0)
+            csv_bytes = eval_csv.read()
 
-            csv_bytes = (
-                eval_csv.read()
-            )
+            if not csv_bytes or len(csv_bytes.strip()) == 0:
+                raise ValueError("評価CSVが空です。")
 
-            # CSVとして読めるか確認
-            df_eval = validate_csv(
-                csv_bytes
-            )
+            validate_csv(csv_bytes)
 
             evaluation_path = (
-                f"evaluations/"
-                f"{collection_id}/"
-                f"{batch_id}/"
-                f"evaluation.csv"
+                f"evaluations/{collection_id}/evaluation.csv"
             )
 
             upload_bytes_to_gcs(
@@ -678,385 +622,88 @@ def submit():
             )
 
         except Exception as e:
-
             return jsonify({
                 "success": False,
-                "error":
-                    f"評価CSVの処理に失敗しました: {str(e)}"
+                "error": f"評価CSVの処理に失敗しました: {str(e)}"
             }), 400
 
+    # -----------------------------
+    # WAVを解析せず、GCSへ一時保存
+    # -----------------------------
+    audio_files = request.files.getlist("audio_files")
 
-    # =====================================================
-    # B. WAV処理
-    # =====================================================
-
-    audio_files = (
-        request.files.getlist(
-            "audio_files"
-        )
-    )
-
-
-    if len(audio_files) == 0:
-
+    if not audio_files:
         return jsonify({
             "success": False,
-            "error":
-                "WAVファイルがありません。"
+            "error": "WAVファイルがありません。"
         }), 400
 
+    uploaded_files = []
 
-    for index, file in enumerate(
-        audio_files
-    ):
+    try:
+        for offset, file in enumerate(audio_files):
 
-        if (
-            not file
-            or file.filename == ""
-        ):
-            continue
+            if not file or not file.filename:
+                continue
 
+            original_filename = secure_filename(file.filename)
 
-        original_filename = (
-            secure_filename(
-                file.filename
-            )
-        )
+            if not original_filename:
+                original_filename = f"audio_{start_index + offset:04d}.wav"
 
+            global_index = start_index + offset
 
-        # ---------------------------------------------
-        # 個人を直接識別しない研究用ID
-        # ---------------------------------------------
-
-        sample_id = (
-            f"{batch_id}_"
-            f"{index:04d}"
-        )
-
-
-        temp_path = None
-
-
-        try:
-
-            # =========================================
-            # Render上へ一時保存
-            # =========================================
-
-            with tempfile.NamedTemporaryFile(
-                suffix=".wav",
-                delete=False
-            ) as temp_file:
-
-                file.save(
-                    temp_file
-                )
-
-                temp_path = (
-                    temp_file.name
-                )
-
-
-            # =========================================
-            # 音響特徴量抽出
-            # =========================================
-
-            (
-                features,
-                frame_count
-
-            ) = extract_acoustic_features(
-                temp_path
+            # 再試行しても同じ場所へ入るように決定的な名前にする
+            object_name = (
+                f"incoming/{collection_id}/"
+                f"{global_index:04d}_{original_filename}"
             )
 
-
-            # =========================================
-            # 特徴量データを記録
-            # =========================================
-
-            feature_row = {
-
-                "batch_id":
-                    batch_id,
-
-                "sample_id":
-                    sample_id,
-
-                # CSVとの対応確認用
-                # ファイル名に氏名等を含めない運用が望ましい
-                "source_filename":
-                    original_filename,
-
-                **features
-            }
-
-
-            all_features.append(
-                feature_row
+            upload_filestorage_to_gcs(
+                file,
+                object_name,
+                "audio/wav"
             )
 
-
-            # =========================================
-            # WAV保存許可あり
-            # =========================================
-
-            audio_gcs_path = (
-                f"audio/"
-                f"{collection_id}/"
-                f"{batch_id}/"
-                f"{sample_id}.wav"
-            )
-
-
-            if allow_save:
-
-                audio_gcs_path = (
-                    f"audio/"
-                    f"{batch_id}/"
-                    f"{sample_id}.wav"
-                )
-
-                upload_file_to_gcs(
-                    temp_path,
-                    audio_gcs_path,
-                    "audio/wav"
-                )
-
-
-            processed_results.append({
-
-                "sample_id":
-                    sample_id,
-
-                "filename":
-                    original_filename,
-
-                "frames_extracted":
-                    frame_count,
-
-                "audio_saved":
-                    allow_save,
-
-                "audio_path":
-                    audio_gcs_path
+            uploaded_files.append({
+                "index": global_index,
+                "filename": original_filename,
+                "object_name": object_name,
             })
 
-
-        except Exception as e:
-
-            processed_results.append({
-
-                "sample_id":
-                    sample_id,
-
-                "filename":
-                    original_filename,
-
-                "error":
-                    str(e)
-            })
-
-
-        finally:
-
-            # =========================================
-            # ★非常に重要
-            #
-            # WAV保存許可の有無にかかわらず
-            # Renderの一時ファイルは削除
-            #
-            # 保存許可あり
-            # → GCSに保存済み
-            #
-            # 保存許可なし
-            # → GCSには保存されない
-            # =========================================
-
-            if (
-                temp_path
-                and
-                os.path.exists(
-                    temp_path
-                )
-            ):
-
-                os.remove(
-                    temp_path
-                )
-
-
-    # =====================================================
-    # C. features.csvを作る
-    # =====================================================
-
-    features_path = None
-
-
-    if len(all_features) > 0:
-
-        df_features = pd.DataFrame(
-            all_features
-        )
-
-
-        # Excelで開いたときにも日本語対応しやすい
-        features_csv = (
-            df_features.to_csv(
-                index=False
-            ).encode(
-                "utf-8-sig"
-            )
-        )
-
-
-        features_path = (
-            f"features/"
-            f"{collection_id}/"
-            f"{batch_id}/"
-            f"features.csv"
-        )
-
+        # バッチ単位の記録
+        batch_meta = {
+            "collection_id": collection_id,
+            "batch_number": batch_number,
+            "total_batches": total_batches,
+            "allow_audio_save": allow_save,
+            "uploaded_at": datetime.now(timezone.utc).isoformat(),
+            "files": uploaded_files,
+        }
 
         upload_bytes_to_gcs(
-            features_csv,
-            features_path,
-            "text/csv"
+            json.dumps(
+                batch_meta,
+                ensure_ascii=False,
+                indent=2
+            ).encode("utf-8"),
+            f"uploads/{collection_id}/batch_{batch_number:03d}.json",
+            "application/json"
         )
 
+        return jsonify({
+            "success": True,
+            "collection_id": collection_id,
+            "batch_number": batch_number,
+            "uploaded_count": len(uploaded_files),
+            "evaluation_path": evaluation_path,
+        })
 
-    # =====================================================
-    # D. 処理情報をmanifestとして保存
-    # =====================================================
-
-    manifest = {
-        "collection_id":
-            collection_id,
-        
-        "batch_id":
-            batch_id,
-
-        "submitted_at":
-            submitted_at,
-
-        "allow_audio_save":
-            allow_save,
-
-        "number_of_audio_files":
-            len(
-                processed_results
-            ),
-
-        "number_of_successful_features":
-            len(
-                all_features
-            ),
-
-        "extractor": {
-
-            "name":
-                "Singing Evaluation Feature Extractor",
-
-            "version":
-                "1.1.0",
-
-            "feature_set":
-                "eGeMAPSv02",
-
-            "functionals":
-                True,
-
-            "lld":
-                True,
-
-            "dynamic_features": {
-                "targets": [
-                    "F0",
-                    "Loudness",
-                    "MFCC1",
-                    "F1",
-                    "F2"
-                ],
-                "frame_shift_sec":
-                    0.01,
-                "window_frames": [
-                    10,
-                    25,
-                    50,
-                    100
-                ]
-            },
-
-            "f0_stability": {
-                "unit":
-                    "cent",
-
-                "threshold_cent": [
-                    5,
-                    10,
-                    20
-                ]
-            }
-        },
-
-        "features_path":
-            features_path,
-
-        "evaluation_path":
-            evaluation_path
-    }
-
-
-    manifest_path = (
-        f"manifests/"
-        f"{collection_id}/"
-        f"{batch_id}/"
-        f"manifest.json"
-    )
-
-
-    upload_bytes_to_gcs(
-
-        json.dumps(
-            manifest,
-            ensure_ascii=False,
-            indent=2
-        ).encode(
-            "utf-8"
-        ),
-
-        manifest_path,
-
-        "application/json"
-    )
-
-
-    # =====================================================
-    # E. 完了レスポンス
-    # =====================================================
-
-    return jsonify({
-
-        "success":
-            True,
-
-        "message":
-            "音響特徴量の抽出と保存が完了しました。",
-
-        "batch_id":
-            batch_id,
-
-        "audio_saved":
-            allow_save,
-
-        "features_path":
-            features_path,
-
-        "evaluation_path":
-            evaluation_path,
-
-        "processed_files":
-            processed_results
-    })
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": f"WAVのアップロードに失敗しました: {str(e)}"
+        }), 500
 
 
 # =========================================================

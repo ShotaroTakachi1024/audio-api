@@ -79,18 +79,26 @@
         .error {
             color: red;
         }
+
+        .important {
+            padding: 14px;
+            margin-top: 16px;
+            border: 1px solid #999;
+            border-radius: 8px;
+            font-weight: bold;
+        }
     </style>
 </head>
 
 <body>
 
-    <h1>歌唱データ・印象評価 一括解析システム</h1>
+    <h1>歌唱データ・印象評価 一括受付システム</h1>
 
     <p>
-        複数の歌唱音声を選択すると、
-        システムが10ファイルずつ自動的に送信・解析します。
+        選択したWAVファイルを10件ずつGoogle Cloud Storageへ送信します。
+        アップロード受付が完了した後、音響特徴量の抽出は
+        バックグラウンドで実行されます。
     </p>
-
 
     <form id="uploadForm">
 
@@ -166,13 +174,13 @@
                 >
 
                 元の歌唱音声（WAVファイル）も
-                研究用データとして保存することを許可します。
+                研究用データとして継続保存することを許可します。
             </label>
 
             <p>
-                チェックしない場合、
-                WAVは特徴量抽出に一時的に使用した後、
-                Render上の一時ファイルを削除します。
+                チェックしない場合でも、音響特徴量を抽出するため、
+                WAVファイルをGoogle Cloud Storageへ一時的に保存します。
+                特徴量抽出が完了した後、元音声は削除します。
             </p>
 
         </div>
@@ -182,7 +190,7 @@
             id="submitButton"
             type="submit"
         >
-            解析を開始
+            アップロードを開始
         </button>
 
     </form>
@@ -190,7 +198,7 @@
 
     <div id="progressArea">
 
-        <h2>処理状況</h2>
+        <h2>アップロード状況</h2>
 
         <progress
             id="progressBar"
@@ -204,6 +212,13 @@
 
         <div id="currentStatus">
             準備中...
+        </div>
+
+        <div
+            id="doneMessage"
+            class="important"
+            style="display:none;"
+        >
         </div>
 
         <div id="resultLog"></div>
@@ -244,6 +259,9 @@ const currentStatus =
 
 const resultLog =
     document.getElementById("resultLog");
+
+const doneMessage =
+    document.getElementById("doneMessage");
 
 
 audioInput.addEventListener(
@@ -306,10 +324,11 @@ function createCollectionId() {
 }
 
 
-async function sendBatch({
+async function uploadBatch({
     files,
     batchIndex,
     totalBatches,
+    startIndex,
     collectionId,
     evalFile,
     includeEvaluation,
@@ -319,13 +338,10 @@ async function sendBatch({
     const formData =
         new FormData();
 
-
-    // 200音声全体を識別するID
     formData.append(
         "collection_id",
         collectionId
     );
-
 
     formData.append(
         "batch_number",
@@ -334,7 +350,6 @@ async function sendBatch({
         )
     );
 
-
     formData.append(
         "total_batches",
         String(
@@ -342,12 +357,17 @@ async function sendBatch({
         )
     );
 
+    formData.append(
+        "start_index",
+        String(
+            startIndex
+        )
+    );
 
     formData.append(
         "allow_feature_use",
         "yes"
     );
-
 
     if (allowSave) {
 
@@ -357,7 +377,6 @@ async function sendBatch({
         );
 
     }
-
 
     // 評価CSVは最初のバッチだけ送信
     if (
@@ -372,7 +391,6 @@ async function sendBatch({
 
     }
 
-
     for (
         const file of files
     ) {
@@ -384,16 +402,14 @@ async function sendBatch({
 
     }
 
-
     const response =
         await fetch(
-            "/submit",
+            "/upload-batch",
             {
                 method: "POST",
                 body: formData
             }
         );
-
 
     let result;
 
@@ -410,6 +426,53 @@ async function sendBatch({
 
     }
 
+    if (
+        !response.ok ||
+        result.success === false
+    ) {
+
+        throw new Error(
+            result.error ||
+            "アップロードに失敗しました。"
+        );
+
+    }
+
+    return result;
+}
+
+
+async function startBackgroundProcessing({
+    collectionId,
+    totalFiles,
+    totalBatches,
+    allowSave
+}) {
+
+    const response =
+        await fetch(
+            "/start-processing",
+            {
+                method: "POST",
+                headers: {
+                    "Content-Type":
+                        "application/json"
+                },
+                body: JSON.stringify({
+                    collection_id:
+                        collectionId,
+                    total_files:
+                        totalFiles,
+                    total_batches:
+                        totalBatches,
+                    allow_save:
+                        allowSave
+                })
+            }
+        );
+
+    const result =
+        await response.json();
 
     if (
         !response.ok ||
@@ -418,11 +481,10 @@ async function sendBatch({
 
         throw new Error(
             result.error ||
-            "バッチ処理に失敗しました。"
+            "バックグラウンド解析の受付に失敗しました。"
         );
 
     }
-
 
     return result;
 }
@@ -434,16 +496,13 @@ form.addEventListener(
 
         event.preventDefault();
 
-
         const files =
             Array.from(
                 audioInput.files
             );
 
-
         const evalFile =
             evalInput.files[0];
-
 
         const allowFeatureUse =
             document
@@ -451,7 +510,6 @@ form.addEventListener(
                 "allowFeatureUse"
             )
             .checked;
-
 
         const allowSave =
             document
@@ -474,11 +532,35 @@ form.addEventListener(
 
 
         if (
+            files.length > 200
+        ) {
+
+            alert(
+                "WAVファイルは200件以内にしてください。"
+            );
+
+            return;
+        }
+
+
+        if (
             !evalFile
         ) {
 
             alert(
                 "評価CSVを選択してください。"
+            );
+
+            return;
+        }
+
+
+        if (
+            evalFile.size === 0
+        ) {
+
+            alert(
+                "選択した評価CSVが空です。"
             );
 
             return;
@@ -500,13 +582,11 @@ form.addEventListener(
         const totalFiles =
             files.length;
 
-
         const totalBatches =
             Math.ceil(
                 totalFiles /
                 BATCH_SIZE
             );
-
 
         const collectionId =
             createCollectionId();
@@ -515,26 +595,23 @@ form.addEventListener(
         progressArea.style.display =
             "block";
 
+        doneMessage.style.display =
+            "none";
 
         submitButton.disabled =
             true;
 
-
         audioInput.disabled =
             true;
-
 
         evalInput.disabled =
             true;
 
-
         resultLog.innerHTML =
             "";
 
-
         progressBar.value =
             0;
-
 
         progressText.textContent =
             `0 / ${totalFiles}`;
@@ -544,13 +621,12 @@ form.addEventListener(
             `collection_id: ${collectionId}`
         );
 
-
         addLog(
-            `${totalFiles}件を ${totalBatches} バッチに分割して処理します。`
+            `${totalFiles}件を ${totalBatches} バッチに分割してアップロードします。`
         );
 
 
-        let completedFiles =
+        let uploadedFiles =
             0;
 
 
@@ -566,14 +642,12 @@ form.addEventListener(
                     batchIndex *
                     BATCH_SIZE;
 
-
                 const end =
                     Math.min(
                         start +
                         BATCH_SIZE,
                         totalFiles
                     );
-
 
                 const batchFiles =
                     files.slice(
@@ -583,19 +657,17 @@ form.addEventListener(
 
 
                 currentStatus.textContent =
-                    `バッチ ${batchIndex + 1} / ${totalBatches} を処理中 `
+                    `バッチ ${batchIndex + 1} / ${totalBatches} をアップロード中 `
                     + `(${start + 1}〜${end}件目)`;
 
 
                 addLog(
-                    `▶ バッチ ${batchIndex + 1}: ${batchFiles.length}件を送信`
+                    `▶ バッチ ${batchIndex + 1}: ${batchFiles.length}件をアップロード`
                 );
 
 
-                // 最大2回まで再試行
-                let result = null;
-
-                let lastError = null;
+                let lastError =
+                    null;
 
 
                 for (
@@ -606,39 +678,38 @@ form.addEventListener(
 
                     try {
 
-                        result =
-                            await sendBatch({
+                        await uploadBatch({
 
-                                files:
-                                    batchFiles,
+                            files:
+                                batchFiles,
 
-                                batchIndex,
+                            batchIndex,
 
-                                totalBatches,
+                            totalBatches,
 
-                                collectionId,
+                            startIndex:
+                                start,
 
-                                evalFile,
+                            collectionId,
 
-                                includeEvaluation:
-                                    batchIndex === 0,
+                            evalFile,
 
-                                allowSave
+                            includeEvaluation:
+                                batchIndex === 0,
 
-                            });
+                            allowSave
 
+                        });
 
                         lastError =
                             null;
 
                         break;
 
-
                     } catch (error) {
 
                         lastError =
                             error;
-
 
                         addLog(
                             `バッチ ${batchIndex + 1} 失敗 `
@@ -647,7 +718,6 @@ form.addEventListener(
                             "error"
                         );
 
-
                         if (
                             attempt < 2
                         ) {
@@ -655,7 +725,6 @@ form.addEventListener(
                             addLog(
                                 "5秒後に再試行します..."
                             );
-
 
                             await new Promise(
                                 resolve =>
@@ -681,105 +750,76 @@ form.addEventListener(
                 }
 
 
-                completedFiles +=
+                uploadedFiles +=
                     batchFiles.length;
 
-
-                const percentage =
+                progressBar.value =
                     (
-                        completedFiles /
+                        uploadedFiles /
                         totalFiles
                     ) *
                     100;
 
-
-                progressBar.value =
-                    percentage;
-
-
                 progressText.textContent =
-                    `${completedFiles} / ${totalFiles}`;
-
+                    `${uploadedFiles} / ${totalFiles}`;
 
                 addLog(
-                    `✓ バッチ ${batchIndex + 1} 完了`,
+                    `✓ バッチ ${batchIndex + 1} アップロード完了`,
                     "success"
                 );
-
-
-                if (
-                    result.processed_files
-                ) {
-
-                    for (
-                        const item
-                        of result.processed_files
-                    ) {
-
-                        if (
-                            item.error
-                        ) {
-
-                            addLog(
-                                `  × ${item.filename}: ${item.error}`,
-                                "error"
-                            );
-
-                        } else {
-
-                            addLog(
-                                `  ✓ ${item.filename}`,
-                                "success"
-                            );
-
-                        }
-
-                    }
-
-                }
 
             }
 
 
             currentStatus.textContent =
-                "すべての処理が完了しました。";
+                "解析ジョブを登録しています...";
+
 
 
             progressBar.value =
                 100;
 
-
             progressText.textContent =
                 `${totalFiles} / ${totalFiles}`;
 
+            currentStatus.textContent =
+                "アップロード受付が完了しました。";
+
+            doneMessage.style.display =
+                "block";
+
+            doneMessage.textContent =
+                "受付完了です。この時点でブラウザを閉じて大丈夫です。"
+                + " 音響特徴量の抽出は高地が後からで継続します。"
+                + ` collection_id: ${collectionId}`;
 
             addLog(
-                "✓ 全音声の処理が完了しました。",
+                "✓ すべての音声ファイルのアップロードが完了しました。",
                 "success"
+            );
+
+            addLog(
+                `状態確認: /status/${collectionId}`
             );
 
 
         } catch (error) {
 
             currentStatus.textContent =
-                "処理中にエラーが発生しました。";
-
+                "アップロード中にエラーが発生しました。";
 
             addLog(
                 `処理停止: ${error.message}`,
                 "error"
             );
 
-
         } finally {
 
             submitButton.disabled =
                 false;
 
-
             audioInput.disabled =
                 false;
-
 
             evalInput.disabled =
                 false;
