@@ -775,13 +775,6 @@ form.addEventListener(
                 "解析ジョブを登録しています...";
 
 
-            await startBackgroundProcessing({
-                collectionId,
-                totalFiles,
-                totalBatches,
-                allowSave
-            });
-
 
             progressBar.value =
                 100;
@@ -797,11 +790,11 @@ form.addEventListener(
 
             doneMessage.textContent =
                 "受付完了です。この時点でブラウザを閉じて大丈夫です。"
-                + " 音響特徴量の抽出はバックグラウンドで継続します。"
+                + " 音響特徴量の抽出は高地が後からで継続します。"
                 + ` collection_id: ${collectionId}`;
 
             addLog(
-                "✓ バックグラウンド解析を受け付けました。",
+                "✓ すべての音声ファイルのアップロードが完了しました。",
                 "success"
             );
 
