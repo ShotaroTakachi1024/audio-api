@@ -39,8 +39,13 @@ def send_result_email(
         "MAIL_APP_PASSWORD"
     ]
 
-    result_email_to = os.environ[
-        "RESULT_EMAIL_TO"
+    result_email_to = [
+        address.strip()
+        for address
+        in os.environ[
+            "RESULT_EMAIL_TO"
+        ].split(",")
+        if address.strip()
     ]
 
 
@@ -52,7 +57,9 @@ def send_result_email(
 
     message["From"] = mail_username
 
-    message["To"] = result_email_to
+    message["To"] = ", ".join(
+        result_email_to
+    )
 
     message["Subject"] = (
         "【歌唱データ解析完了】"
