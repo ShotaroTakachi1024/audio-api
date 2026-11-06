@@ -312,6 +312,16 @@ def process_job(job_blob):
         )
     )
 
+    features_csv = (
+        df_features
+        .to_csv(
+            index=False
+        )
+        .encode(
+            "utf-8-sig"
+        )
+    )
+
     features_path = (
         f"features/"
         f"{collection_id}/"
